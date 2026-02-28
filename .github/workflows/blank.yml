@@ -1,0 +1,107 @@
+name: Continuous Pterodactyl VPS
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+jobs:
+  pterodactyl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      # 🖥️ HOSTNAME
+      - name: Set hostname to ggn
+        run: sudo hostnamectl set-hostname ggn
+
+      # 🔧 DEPENDÊNCIAS DO SISTEMA + PTERODACTYL
+      - name: Install system dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            nginx mariadb-server redis-server \
+            curl unzip tar net-tools neofetch sudo software-properties-common
+
+          sudo add-apt-repository ppa:ondrej/php -y
+          sudo apt update
+          sudo apt install -y \
+            php8.1 php8.1-cli php8.1-fpm php8.1-mysql \
+            php8.1-redis php8.1-zip php8.1-gd php8.1-mbstring \
+            php8.1-curl php8.1-xml php8.1-bcmath
+
+          curl -sS https://getcomposer.org/installer | sudo php -- --install-dir=/usr/local/bin --filename=composer
+
+      # 👤 USUÁRIO ggn
+      - name: Create user ggn with sudo
+        run: |
+          if ! id -u ggn >/dev/null 2>&1; then
+            sudo useradd -m -s /bin/bash ggn
+            echo "ggn:ggn" | sudo chpasswd
+            sudo usermod -aG sudo ggn
+            echo "ggn ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/ggn
+          fi
+
+      # 🗄️ MYSQL
+      - name: Start MySQL and create database
+        run: |
+          sudo service mysql start
+          sudo mysql -e "CREATE DATABASE IF NOT EXISTS pterodactyl;"
+
+      # ⬇️ DOWNLOAD BACKUP
+      - name: Download Pterodactyl backup (if any)
+        uses: actions/download-artifact@v4
+        with:
+          name: pterodactyl-backup
+          path: ./backup
+        continue-on-error: true
+
+      # ♻️ RESTORE
+      - name: Restore files and database
+        run: |
+          if [ -f ./backup/backup.zip ]; then
+            sudo unzip -o ./backup/backup.zip -d /
+            if [ -f /root/pterodactyl.sql ]; then
+              sudo mysql pterodactyl < /root/pterodactyl.sql || true
+            fi
+          else
+            echo "Primeira execução, sem backup"
+          fi
+
+      # 🔑 TMATE (SSH)
+      - name: Start tmate session
+        uses: mxschmitt/action-tmate@v3
+
+      - name: Show tmate info
+        run: |
+          echo "🔑 Use o comando abaixo para acessar:"
+          cat $HOME/.tmate.sock/ssh || echo "tmate ainda não disponível"
+
+      # ⏳ KEEP ALIVE (6h)
+      - name: Keep VPS alive
+        run: sleep 21600
+
+      # ⬆️ BACKUP
+      - name: Create Pterodactyl backup
+        run: |
+          sudo mkdir -p /root/backup
+          sudo mysqldump pterodactyl > /root/pterodactyl.sql || true
+
+          sudo zip -r /root/backup/backup.zip \
+            /var/www/pterodactyl \
+            /etc/pterodactyl \
+            /var/lib/pterodactyl \
+            /etc/nginx \
+            /etc/letsencrypt \
+            /home \
+            /root/pterodactyl.sql
+
+      # 📦 UPLOAD (sobrescreve automaticamente)
+      - name: Upload backup artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pterodactyl-backup
+          path: /root/backup/backup.zip
