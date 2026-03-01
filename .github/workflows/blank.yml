@@ -1,4 +1,4 @@
-name: Debian13 VM Persistent
+name: Debian13 VM Persistent + TMATE
 
 on:
   workflow_dispatch:
@@ -17,25 +17,30 @@ jobs:
       # -----------------------------
       # Instalar dependências
       # -----------------------------
-      - name: Install QEMU + tools
+      - name: Install QEMU tools
         run: |
           sudo apt update
-          sudo apt install -y qemu-system-x86 cloud-image-utils cpu-checker qemu-utils
+          sudo apt install -y \
+            qemu-system-x86 \
+            qemu-utils \
+            cloud-image-utils \
+            cpu-checker \
+            wget
 
       # -----------------------------
-      # Verificar KVM
+      # Verificar KVM real
       # -----------------------------
       - name: Check KVM
         run: |
           if [ -e /dev/kvm ]; then
-            echo "KVM exists"
+            echo "KVM device exists"
             ls -l /dev/kvm
           else
-            echo "No KVM available"
+            echo "KVM not available"
           fi
 
       # -----------------------------
-      # Restaurar backup da VM
+      # Restaurar backup
       # -----------------------------
       - name: Download VM Backup
         uses: actions/download-artifact@v4
@@ -47,11 +52,12 @@ jobs:
       # -----------------------------
       # Preparar disco
       # -----------------------------
-      - name: Prepare VM disk
+      - name: Prepare VM Disk
         run: |
           mkdir -p vm
+
           if [ ! -f vm/debian13.qcow2 ]; then
-            echo "No backup found. Downloading fresh image..."
+            echo "No backup found. Downloading fresh Debian 13..."
             wget https://cloud.debian.org/images/cloud/trixie/daily/latest/debian-13-generic-amd64-daily.qcow2 \
               -O vm/debian13.qcow2
           else
@@ -61,7 +67,7 @@ jobs:
       # -----------------------------
       # Criar cloud-init
       # -----------------------------
-      - name: Create cloud-init config
+      - name: Create Cloud-Init
         run: |
           cat <<EOF > vm/user-data
           #cloud-config
@@ -82,46 +88,52 @@ jobs:
           cloud-localds vm/seed.iso vm/user-data vm/meta-data
 
       # -----------------------------
-      # 🔑 TMATE (acesso remoto)
+      # 🔑 TMATE
       # -----------------------------
       - name: Start tmate session
         uses: mxschmitt/action-tmate@v3
 
       - name: Show tmate info
         run: |
-          echo "🔑 Use o comando abaixo para acessar:"
-          cat $HOME/.tmate.sock/ssh || echo "tmate ainda não disponível"
+          echo "SSH command:"
+          cat $HOME/.tmate.sock/ssh || echo "tmate not ready"
 
       # -----------------------------
-      # Iniciar VM
+      # Iniciar VM (modo debug real)
       # -----------------------------
       - name: Start VM
         run: |
-          TOTAL_RAM=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
-          VM_RAM=$((TOTAL_RAM*70/100))
-          CPU_CORES=$(nproc)
+          echo "Starting VM..."
 
-          echo "Detected RAM: $TOTAL_RAM MB"
-          echo "Allocating: $VM_RAM MB"
+          RAM_MB=2048
+          CPU_CORES=2
 
           if [ -e /dev/kvm ]; then
+            echo "Using KVM acceleration"
             ACCEL="-enable-kvm"
           else
+            echo "Running without KVM"
             ACCEL=""
           fi
 
-          qemu-system-x86_64 \
+          sudo qemu-system-x86_64 \
             $ACCEL \
-            -m $VM_RAM \
+            -m $RAM_MB \
             -smp $CPU_CORES \
             -drive file=vm/debian13.qcow2,format=qcow2 \
             -drive file=vm/seed.iso,format=raw \
             -net nic \
             -net user,hostfwd=tcp::2222-:22 \
             -nographic &
+          
+          echo "VM started in background"
+          sleep 15
+
+          echo "Checking if QEMU is running:"
+          ps aux | grep qemu
 
       # -----------------------------
-      # Manter VM ativa
+      # Manter ativo
       # -----------------------------
       - name: Keep Alive
         run: sleep 21000
@@ -129,10 +141,11 @@ jobs:
       # -----------------------------
       # Compactar disco
       # -----------------------------
-      - name: Compact VM Disk
+      - name: Compact Disk
         run: |
-          qemu-img convert -O qcow2 vm/debian13.qcow2 vm/debian13-backup.qcow2
-          mv vm/debian13-backup.qcow2 vm/debian13.qcow2
+          echo "Compacting disk..."
+          qemu-img convert -O qcow2 vm/debian13.qcow2 vm/debian13-new.qcow2
+          mv vm/debian13-new.qcow2 vm/debian13.qcow2
 
       # -----------------------------
       # Upload backup
