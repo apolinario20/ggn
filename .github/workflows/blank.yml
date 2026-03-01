@@ -1,4 +1,4 @@
-name: Debian13 VM Persistent + TMATE
+name: Debian13 VM 12GB KVM
 
 on:
   workflow_dispatch:
@@ -17,27 +17,14 @@ jobs:
       # -----------------------------
       # Instalar dependências
       # -----------------------------
-      - name: Install QEMU tools
+      - name: Install QEMU
         run: |
           sudo apt update
           sudo apt install -y \
             qemu-system-x86 \
             qemu-utils \
             cloud-image-utils \
-            cpu-checker \
             wget
-
-      # -----------------------------
-      # Verificar KVM real
-      # -----------------------------
-      - name: Check KVM
-        run: |
-          if [ -e /dev/kvm ]; then
-            echo "KVM device exists"
-            ls -l /dev/kvm
-          else
-            echo "KVM not available"
-          fi
 
       # -----------------------------
       # Restaurar backup
@@ -52,22 +39,22 @@ jobs:
       # -----------------------------
       # Preparar disco
       # -----------------------------
-      - name: Prepare VM Disk
+      - name: Prepare Disk
         run: |
           mkdir -p vm
 
           if [ ! -f vm/debian13.qcow2 ]; then
-            echo "No backup found. Downloading fresh Debian 13..."
+            echo "Downloading fresh Debian 13 image..."
             wget https://cloud.debian.org/images/cloud/trixie/daily/latest/debian-13-generic-amd64-daily.qcow2 \
               -O vm/debian13.qcow2
           else
-            echo "Backup restored successfully."
+            echo "Backup restored."
           fi
 
       # -----------------------------
       # Criar cloud-init
       # -----------------------------
-      - name: Create Cloud-Init
+      - name: Create Cloud Init
         run: |
           cat <<EOF > vm/user-data
           #cloud-config
@@ -88,48 +75,32 @@ jobs:
           cloud-localds vm/seed.iso vm/user-data vm/meta-data
 
       # -----------------------------
-      # 🔑 TMATE
+      # TMATE
       # -----------------------------
       - name: Start tmate session
         uses: mxschmitt/action-tmate@v3
 
-      - name: Show tmate info
-        run: |
-          echo "SSH command:"
-          cat $HOME/.tmate.sock/ssh || echo "tmate not ready"
+      - name: Show SSH command
+        run: cat $HOME/.tmate.sock/ssh
 
       # -----------------------------
-      # Iniciar VM (modo debug real)
+      # Iniciar VM com 12GB RAM / 4 cores
       # -----------------------------
-      - name: Start VM
+      - name: Start VM with KVM
         run: |
-          echo "Starting VM..."
-
-          RAM_MB=2048
-          CPU_CORES=2
-
-          if [ -e /dev/kvm ]; then
-            echo "Using KVM acceleration"
-            ACCEL="-enable-kvm"
-          else
-            echo "Running without KVM"
-            ACCEL=""
-          fi
+          echo "Starting VM with 12GB RAM and 4 cores..."
 
           sudo qemu-system-x86_64 \
-            $ACCEL \
-            -m $RAM_MB \
-            -smp $CPU_CORES \
+            -enable-kvm \
+            -m 12288 \
+            -smp 4 \
             -drive file=vm/debian13.qcow2,format=qcow2 \
             -drive file=vm/seed.iso,format=raw \
-            -net nic \
-            -net user,hostfwd=tcp::2222-:22 \
+            -nic user,hostfwd=tcp::2222-:22 \
             -nographic &
           
-          echo "VM started in background"
-          sleep 15
-
-          echo "Checking if QEMU is running:"
+          sleep 40
+          echo "Checking QEMU process:"
           ps aux | grep qemu
 
       # -----------------------------
@@ -143,7 +114,6 @@ jobs:
       # -----------------------------
       - name: Compact Disk
         run: |
-          echo "Compacting disk..."
           qemu-img convert -O qcow2 vm/debian13.qcow2 vm/debian13-new.qcow2
           mv vm/debian13-new.qcow2 vm/debian13.qcow2
 
