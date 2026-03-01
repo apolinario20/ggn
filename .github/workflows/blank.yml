@@ -1,4 +1,4 @@
-name: Debian13 KVM 12GB VM
+name: Debian13 VM Backup Safe
 
 on:
   workflow_dispatch:
@@ -11,30 +11,49 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install QEMU
+      - name: Install dependencies
         run: |
           sudo apt update
           sudo apt install -y qemu-system-x86 qemu-utils cloud-image-utils wget netcat-openbsd
 
-      - name: Prepare Folder
+      - name: Prepare folder
         run: mkdir -p vm
 
-      - name: Generate SSH Key
-        run: ssh-keygen -t ed25519 -f mykey -N ""
+      # 🔁 Restaurar backup se existir
+      - name: Download previous backup
+        uses: actions/download-artifact@v4
+        with:
+          name: vm-backup
+          path: vm
+        continue-on-error: true
 
-      - name: Download Debian Image
+      # 📦 Baixar imagem se não existir
+      - name: Download Debian image
         run: |
           if [ ! -f vm/debian13.qcow2 ]; then
             wget https://cloud.debian.org/images/cloud/trixie/daily/latest/debian-13-generic-amd64-daily.qcow2 \
               -O vm/debian13.qcow2
+            qemu-img resize vm/debian13.qcow2 100G
           fi
 
-      - name: Create Cloud Init
+      # 🔑 Criar chave SSH
+      - name: Generate SSH key
+        run: ssh-keygen -t ed25519 -f mykey -N ""
+
+      # ☁ Cloud-init
+      - name: Create cloud-init
         run: |
           PUBKEY=$(cat mykey.pub)
 
           cat <<EOF > vm/user-data
           #cloud-config
+          growpart:
+            mode: auto
+            devices: ['/']
+            ignore_growroot_disabled: false
+
+          resize_rootfs: true
+
           users:
             - name: root
               ssh_authorized_keys:
@@ -54,11 +73,12 @@ jobs:
 
           cloud-localds vm/seed.iso vm/user-data vm/meta-data
 
+      # 🚀 Iniciar VM
       - name: Start VM
         run: |
           sudo nohup qemu-system-x86_64 \
             -enable-kvm \
-            -m 12288 \
+            -m 13000 \
             -smp 4 \
             -drive file=vm/debian13.qcow2,format=qcow2 \
             -drive file=vm/seed.iso,format=raw \
@@ -66,15 +86,30 @@ jobs:
             -nographic \
             > vm.log 2>&1 &
 
-          sleep 40
+          sleep 60
 
+      # 🔑 TMATE
       - name: Start tmate
         uses: mxschmitt/action-tmate@v3
         with:
           detached: true
 
-      - name: Show tmate SSH
-        run: cat $HOME/.tmate.sock/ssh
+      - name: Show SSH command
+        run: echo "ssh -i mykey root@localhost -p 2222"
 
-      - name: Keep Alive
+      # ⏳ Rodar por ~6h
+      - name: Keep alive
         run: sleep 21000
+
+      # 💾 Compactar disco antes do backup
+      - name: Compact disk
+        run: |
+          qemu-img convert -O qcow2 vm/debian13.qcow2 vm/compact.qcow2
+          mv vm/compact.qcow2 vm/debian13.qcow2
+
+      # 📤 Upload backup
+      - name: Upload backup
+        uses: actions/upload-artifact@v4
+        with:
+          name: vm-backup
+          path: vm/debian13.qcow2
