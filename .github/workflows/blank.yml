@@ -1,9 +1,7 @@
-name: Debian13 VM 12GB KVM
+name: Debian13 KVM 12GB VM
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "0 */6 * * *"
 
 jobs:
   vm:
@@ -15,7 +13,7 @@ jobs:
         uses: actions/checkout@v4
 
       # -----------------------------
-      # Instalar dependências
+      # Instalar QEMU
       # -----------------------------
       - name: Install QEMU
         run: |
@@ -27,28 +25,19 @@ jobs:
             wget
 
       # -----------------------------
-      # Restaurar backup
+      # Criar pasta VM
       # -----------------------------
-      - name: Download VM Backup
-        uses: actions/download-artifact@v4
-        with:
-          name: debian13-backup
-          path: ./vm
-        continue-on-error: true
+      - name: Prepare Folder
+        run: mkdir -p vm
 
       # -----------------------------
-      # Preparar disco
+      # Baixar imagem Debian 13 se não existir
       # -----------------------------
-      - name: Prepare Disk
+      - name: Download Debian Image
         run: |
-          mkdir -p vm
-
           if [ ! -f vm/debian13.qcow2 ]; then
-            echo "Downloading fresh Debian 13 image..."
             wget https://cloud.debian.org/images/cloud/trixie/daily/latest/debian-13-generic-amd64-daily.qcow2 \
               -O vm/debian13.qcow2
-          else
-            echo "Backup restored."
           fi
 
       # -----------------------------
@@ -60,7 +49,6 @@ jobs:
           #cloud-config
           ssh_pwauth: true
           disable_root: false
-
           chpasswd:
             list: |
               root:root
@@ -75,20 +63,11 @@ jobs:
           cloud-localds vm/seed.iso vm/user-data vm/meta-data
 
       # -----------------------------
-      # TMATE
-      # -----------------------------
-      - name: Start tmate session
-        uses: mxschmitt/action-tmate@v3
-
-      - name: Show SSH command
-        run: cat $HOME/.tmate.sock/ssh
-
-      # -----------------------------
       # Iniciar VM com 12GB RAM / 4 cores
       # -----------------------------
       - name: Start VM with KVM
         run: |
-          echo "Starting VM with 12GB RAM and 4 cores..."
+          echo "Starting VM..."
 
           sudo qemu-system-x86_64 \
             -enable-kvm \
@@ -97,11 +76,35 @@ jobs:
             -drive file=vm/debian13.qcow2,format=qcow2 \
             -drive file=vm/seed.iso,format=raw \
             -nic user,hostfwd=tcp::2222-:22 \
-            -nographic &
-          
+            -nographic \
+            > vm.log 2>&1 &
+
           sleep 40
-          echo "Checking QEMU process:"
+          echo "VM Started"
           ps aux | grep qemu
+
+      # -----------------------------
+      # Iniciar tmate (não bloqueia)
+      # -----------------------------
+      - name: Start tmate session
+        uses: mxschmitt/action-tmate@v3
+        with:
+          detached: true
+
+      - name: Show SSH command
+        run: cat $HOME/.tmate.sock/ssh
+
+      # -----------------------------
+      # Esperar porta SSH da VM
+      # -----------------------------
+      - name: Wait for VM SSH
+        run: |
+          echo "Waiting SSH port..."
+          for i in {1..30}; do
+            nc -z localhost 2222 && break
+            sleep 5
+          done
+          echo "VM SSH ready"
 
       # -----------------------------
       # Manter ativo
@@ -125,3 +128,4 @@ jobs:
         with:
           name: debian13-backup
           path: vm/debian13.qcow2
+        
