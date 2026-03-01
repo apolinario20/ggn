@@ -12,27 +12,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # -----------------------------
-      # Instalar QEMU
-      # -----------------------------
+      # Instalar dependências
       - name: Install QEMU
         run: |
           sudo apt update
-          sudo apt install -y \
-            qemu-system-x86 \
-            qemu-utils \
-            cloud-image-utils \
-            wget
+          sudo apt install -y qemu-system-x86 qemu-utils cloud-image-utils wget netcat-openbsd
 
-      # -----------------------------
-      # Criar pasta VM
-      # -----------------------------
+      # Criar pasta
       - name: Prepare Folder
         run: mkdir -p vm
 
-      # -----------------------------
-      # Baixar imagem Debian 13 se não existir
-      # -----------------------------
+      # Baixar Debian 13 se não existir
       - name: Download Debian Image
         run: |
           if [ ! -f vm/debian13.qcow2 ]; then
@@ -40,19 +30,22 @@ jobs:
               -O vm/debian13.qcow2
           fi
 
-      # -----------------------------
-      # Criar cloud-init
-      # -----------------------------
+      # CLOUD INIT CORRIGIDO (ROOT FUNCIONA)
       - name: Create Cloud Init
         run: |
           cat <<EOF > vm/user-data
           #cloud-config
           ssh_pwauth: true
           disable_root: false
+
           chpasswd:
             list: |
               root:root
             expire: false
+
+          users:
+            - name: root
+              lock_passwd: false
           EOF
 
           cat <<EOF > vm/meta-data
@@ -62,14 +55,12 @@ jobs:
 
           cloud-localds vm/seed.iso vm/user-data vm/meta-data
 
-      # -----------------------------
-      # Iniciar VM com 12GB RAM / 4 cores
-      # -----------------------------
+      # Iniciar VM
       - name: Start VM with KVM
         run: |
           echo "Starting VM..."
 
-          sudo qemu-system-x86_64 \
+          sudo nohup qemu-system-x86_64 \
             -enable-kvm \
             -m 12288 \
             -smp 4 \
@@ -80,52 +71,24 @@ jobs:
             > vm.log 2>&1 &
 
           sleep 40
-          echo "VM Started"
-          ps aux | grep qemu
 
-      # -----------------------------
-      # Iniciar tmate (não bloqueia)
-      # -----------------------------
-      - name: Start tmate session
+          echo "Checking SSH port..."
+          for i in {1..20}; do
+            nc -z localhost 2222 && break
+            sleep 5
+          done
+
+          echo "VM Started"
+
+      # TMATE (não bloqueia)
+      - name: Start tmate
         uses: mxschmitt/action-tmate@v3
         with:
           detached: true
 
-      - name: Show SSH command
+      - name: Show tmate SSH
         run: cat $HOME/.tmate.sock/ssh
 
-      # -----------------------------
-      # Esperar porta SSH da VM
-      # -----------------------------
-      - name: Wait for VM SSH
-        run: |
-          echo "Waiting SSH port..."
-          for i in {1..30}; do
-            nc -z localhost 2222 && break
-            sleep 5
-          done
-          echo "VM SSH ready"
-
-      # -----------------------------
-      # Manter ativo
-      # -----------------------------
+      # Manter rodando
       - name: Keep Alive
         run: sleep 21000
-
-      # -----------------------------
-      # Compactar disco
-      # -----------------------------
-      - name: Compact Disk
-        run: |
-          qemu-img convert -O qcow2 vm/debian13.qcow2 vm/debian13-new.qcow2
-          mv vm/debian13-new.qcow2 vm/debian13.qcow2
-
-      # -----------------------------
-      # Upload backup
-      # -----------------------------
-      - name: Upload VM Backup
-        uses: actions/upload-artifact@v4
-        with:
-          name: debian13-backup
-          path: vm/debian13.qcow2
-        
