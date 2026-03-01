@@ -9,20 +9,19 @@ jobs:
     timeout-minutes: 350
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      # Instalar dependências
       - name: Install QEMU
         run: |
           sudo apt update
           sudo apt install -y qemu-system-x86 qemu-utils cloud-image-utils wget netcat-openbsd
 
-      # Criar pasta
       - name: Prepare Folder
         run: mkdir -p vm
 
-      # Baixar Debian 13 se não existir
+      - name: Generate SSH Key
+        run: ssh-keygen -t ed25519 -f mykey -N ""
+
       - name: Download Debian Image
         run: |
           if [ ! -f vm/debian13.qcow2 ]; then
@@ -30,22 +29,22 @@ jobs:
               -O vm/debian13.qcow2
           fi
 
-      # CLOUD INIT CORRIGIDO (ROOT FUNCIONA)
       - name: Create Cloud Init
         run: |
+          PUBKEY=$(cat mykey.pub)
+
           cat <<EOF > vm/user-data
           #cloud-config
-          ssh_pwauth: true
-          disable_root: false
-
-          chpasswd:
-            list: |
-              root:root
-            expire: false
-
           users:
             - name: root
+              ssh_authorized_keys:
+                - $PUBKEY
+              sudo: ALL=(ALL) NOPASSWD:ALL
+              shell: /bin/bash
               lock_passwd: false
+
+          disable_root: false
+          ssh_pwauth: false
           EOF
 
           cat <<EOF > vm/meta-data
@@ -55,11 +54,8 @@ jobs:
 
           cloud-localds vm/seed.iso vm/user-data vm/meta-data
 
-      # Iniciar VM
-      - name: Start VM with KVM
+      - name: Start VM
         run: |
-          echo "Starting VM..."
-
           sudo nohup qemu-system-x86_64 \
             -enable-kvm \
             -m 12288 \
@@ -72,15 +68,6 @@ jobs:
 
           sleep 40
 
-          echo "Checking SSH port..."
-          for i in {1..20}; do
-            nc -z localhost 2222 && break
-            sleep 5
-          done
-
-          echo "VM Started"
-
-      # TMATE (não bloqueia)
       - name: Start tmate
         uses: mxschmitt/action-tmate@v3
         with:
@@ -89,6 +76,5 @@ jobs:
       - name: Show tmate SSH
         run: cat $HOME/.tmate.sock/ssh
 
-      # Manter rodando
       - name: Keep Alive
         run: sleep 21000
